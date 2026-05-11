@@ -1,0 +1,17 @@
+# Child repositories managed separately
+OccupancyCounter/
+TestDashboard/
+functions/
+
+# Local IDE and generated runtime data
+.idea/
+azurite-data/
+*.log
+
+# Local environment outputs
+infra/check-result.json
+infra/bicep/main.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
