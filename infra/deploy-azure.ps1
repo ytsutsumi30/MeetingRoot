@@ -8,9 +8,9 @@
 #   - Azure Function App + Application Insights
 #
 # Usage:
-#   .\deploy-azure.ps1
 #   .\deploy-azure.ps1 -WhatIf
-#   .\deploy-azure.ps1 -ResourceGroup rg-meeting-minutes-dev -SpeechSku S0
+#   .\deploy-azure.ps1 -Yes
+#   .\deploy-azure.ps1 -ResourceGroup rg-meeting-minutes-dev -SpeechSku S0 -Yes
 # ============================================================
 
 param(
@@ -38,7 +38,7 @@ function Require-Command {
     param([string]$Name, [string]$InstallHint)
 
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        throw "$Name が見つかりません。$InstallHint"
+        throw "$Name not found. $InstallHint"
     }
 }
 
@@ -52,7 +52,7 @@ Write-Host "============================================================" -Foreg
 Write-Host "  Meeting Minutes Azure deployment (Bicep)" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
-Require-Command -Name "az" -InstallHint "infra\install-tools.ps1 を実行するか、Azure CLI をインストールしてください。"
+Require-Command -Name "az" -InstallHint "Run infra\install-tools.ps1 or install Azure CLI."
 
 $azVersion = az version --output json 2>&1 | ConvertFrom-Json
 Write-Host "Azure CLI: $($azVersion.'azure-cli')" -ForegroundColor Green
@@ -62,7 +62,7 @@ try {
     Write-Host "Signed in: $($account.user.name)" -ForegroundColor Green
     Write-Host "Subscription: $($account.name) ($($account.id))" -ForegroundColor Green
 } catch {
-    throw "az login が必要です。例: az login --tenant <TENANT_ID>"
+    throw "az login is required. Example: az login --tenant TENANT_ID"
 }
 
 Write-Host ""
@@ -75,26 +75,33 @@ Write-Host "  Speech SKU:     $SpeechSku"
 Write-Host ""
 
 if (-not $WhatIf -and -not $Yes) {
-    $confirm = Read-Host "上記設定でデプロイしますか？ (y/N)"
+    $confirm = Read-Host "Deploy with these settings? (y/N)"
     if ($confirm -ne "y") {
-        Write-Host "中止しました。" -ForegroundColor Yellow
+        Write-Host "Cancelled." -ForegroundColor Yellow
         exit 0
     }
 }
 
 if ($DeleteExisting) {
-    Write-Host "既存リソースグループ削除を要求しました: $ResourceGroup" -ForegroundColor Yellow
+    Write-Host "Delete requested for resource group: $ResourceGroup" -ForegroundColor Yellow
     az group delete --name $ResourceGroup --yes --no-wait
-    Write-Host "削除要求を送信しました。完了まで数分かかります。" -ForegroundColor Yellow
+    Write-Host "Delete request submitted. It may take several minutes." -ForegroundColor Yellow
     Start-Sleep -Seconds 5
 }
 
-Write-Host "Resource Group を作成/更新しています..." -ForegroundColor Cyan
-az group create `
-    --name $ResourceGroup `
-    --location $Location `
-    --tags "Project=OccupancyCounter-MeetingMinutes" "Environment=$Environment" `
-    --output none
+if ($WhatIf) {
+    $rgExists = az group exists --name $ResourceGroup --output tsv
+    if ($rgExists -ne "true") {
+        throw "Resource group '$ResourceGroup' does not exist. Create it first with: az group create --name $ResourceGroup --location $Location"
+    }
+} else {
+    Write-Host "Creating/updating resource group..." -ForegroundColor Cyan
+    az group create `
+        --name $ResourceGroup `
+        --location $Location `
+        --tags "Project=OccupancyCounter-MeetingMinutes" "Environment=$Environment" `
+        --output none
+}
 
 $deploymentName = "deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 $commonParams = @(
@@ -105,22 +112,22 @@ $commonParams = @(
 )
 
 if ($WhatIf) {
-    Write-Host "Bicep what-if を実行します..." -ForegroundColor Cyan
+    Write-Host "Running Bicep what-if..." -ForegroundColor Cyan
     az deployment group what-if @commonParams
     exit $LASTEXITCODE
 }
 
-Write-Host "Bicep デプロイを実行します..." -ForegroundColor Cyan
+Write-Host "Running Bicep deployment..." -ForegroundColor Cyan
 az deployment group create `
     --name $deploymentName `
     @commonParams `
     --output json | Out-Null
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Bicep デプロイに失敗しました。"
+    throw "Bicep deployment failed."
 }
 
-Write-Host "Deployment outputs を取得しています..." -ForegroundColor Cyan
+Write-Host "Reading deployment outputs..." -ForegroundColor Cyan
 $outputs = az deployment group show `
     --name $deploymentName `
     --resource-group $ResourceGroup `
@@ -136,14 +143,14 @@ $functionHostName = Get-OutputValue $outputs "functionAppHostName"
 $queueName = Get-OutputValue $outputs "queueName"
 $blobContainerName = Get-OutputValue $outputs "blobContainerName"
 
-Write-Host "Speech API Key を取得しています..." -ForegroundColor Cyan
+Write-Host "Reading Speech API key..." -ForegroundColor Cyan
 $speechKey = az cognitiveservices account keys list `
     --resource-group $ResourceGroup `
     --name $speechResourceName `
     --query "key1" `
     --output tsv
 
-Write-Host "Storage connection string を取得しています..." -ForegroundColor Cyan
+Write-Host "Reading Storage connection string..." -ForegroundColor Cyan
 $storageKey = az storage account keys list `
     --resource-group $ResourceGroup `
     --account-name $storageAccountName `
@@ -151,7 +158,7 @@ $storageKey = az storage account keys list `
     --output tsv
 $storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageAccountName;AccountKey=$storageKey;EndpointSuffix=core.windows.net"
 
-Write-Host ".env.azure を生成しています..." -ForegroundColor Cyan
+Write-Host "Writing .env.azure..." -ForegroundColor Cyan
 $envContent = @"
 # Auto-generated by infra/deploy-azure.ps1 at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 # Do not commit this file. It contains secrets.
@@ -181,7 +188,7 @@ QUEUE_NAME=$queueName
 AZURE_QUEUE_NAME=$queueName
 QUEUE_CONSUMER_MOCK=false
 
-# Blob mode lets Azure Speech fetch uploaded audio without depending on Cloudflare Tunnel.
+# Blob mode lets Azure Speech fetch uploaded audio without Cloudflare Tunnel.
 PUBLISH_MODE=blob
 PUBLIC_BASE_URL=
 
@@ -221,7 +228,7 @@ Write-Host "Function URL:      https://$functionHostName"
 Write-Host ".env output:       $envPath"
 Write-Host ""
 Write-Host "Next steps" -ForegroundColor Yellow
-Write-Host "  1. .env.azure の MS_* / ANTHROPIC_API_KEY / WEBHOOK_CLIENT_STATE を埋める"
-Write-Host "  2. TestDashboard で .env.azure を読み込む、または必要値を TestDashboard\.env にコピー"
-Write-Host "  3. functions を publish: cd functions; func azure functionapp publish $functionAppName"
-Write-Host "  4. Microsoft Graph subscription を WEBHOOK_NOTIFICATION_URL に作成"
+Write-Host "  1. Fill MS_*, ANTHROPIC_API_KEY, and WEBHOOK_CLIENT_STATE in .env.azure"
+Write-Host "  2. Load .env.azure in TestDashboard or copy required values into TestDashboard\.env"
+Write-Host "  3. Publish functions: cd functions; func azure functionapp publish $functionAppName"
+Write-Host "  4. Create Microsoft Graph subscription using WEBHOOK_NOTIFICATION_URL"
