@@ -1,196 +1,227 @@
-﻿# ============================================================
-# Phase 3: Azure 繝ｪ繧ｽ繝ｼ繧ｹ繝・・繝ｭ繧､ (Bicep IaC)
+# ============================================================
+# Azure resource deployment for Meeting Minutes (Bicep IaC)
 # ============================================================
 #
-# 蜑肴署:
-#   - az CLI 縺ｨ Bicep CLI 縺後う繝ｳ繧ｹ繝医・繝ｫ貂医∩
-#   - az login 縺ｧ繧ｵ繧､繝ｳ繧､繝ｳ貂医∩
-#   - 繧ｵ繝悶せ繧ｯ繝ｪ繝励す繝ｧ繝ｳ驕ｸ謚樊ｸ医∩ (az account set)
+# Creates/updates:
+#   - Azure Storage Account (Blob + Queue)
+#   - Azure AI Speech resource
+#   - Azure Function App + Application Insights
 #
-# 菴ｿ縺・婿:
-#   .\deploy-azure.ps1                          # dev迺ｰ蠅・#   .\deploy-azure.ps1 -Environment stg
-#   .\deploy-azure.ps1 -ResourceGroup rg-mtg
+# Usage:
+#   .\deploy-azure.ps1
+#   .\deploy-azure.ps1 -WhatIf
+#   .\deploy-azure.ps1 -ResourceGroup rg-meeting-minutes-dev -SpeechSku S0
 # ============================================================
 
 param(
     [string]$ResourceGroup = "rg-meeting-minutes-dev",
     [string]$Location      = "japaneast",
+    [ValidateSet("dev", "stg", "prod")]
     [string]$Environment   = "dev",
     [string]$ProjectName   = "meetmin",
+    [ValidateSet("F0", "S0")]
+    [string]$SpeechSku     = "S0",
     [switch]$WhatIf,
-    [switch]$DeleteExisting
+    [switch]$DeleteExisting,
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
+
+$rootDir = Split-Path $PSScriptRoot -Parent
 $bicepDir = Join-Path $PSScriptRoot "bicep"
 $mainBicep = Join-Path $bicepDir "main.bicep"
 $paramFile = Join-Path $bicepDir "parameters.local.json"
+$envPath = Join-Path $rootDir ".env.azure"
 
-Write-Host ""
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Cyan
-Write-Host "  Azure 繝ｪ繧ｽ繝ｼ繧ｹ繝・・繝ｭ繧､ (Bicep)" -ForegroundColor Cyan
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Cyan
-Write-Host ""
+function Require-Command {
+    param([string]$Name, [string]$InstallHint)
 
-# az CLI 遒ｺ隱・try {
-    $azVersion = az version --output json 2>&1 | ConvertFrom-Json
-    Write-Host "  笨・Azure CLI: $($azVersion.'azure-cli')" -ForegroundColor Green
-} catch {
-    Write-Host "  笨・Azure CLI 縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ縲・\install-tools.ps1 繧貞ｮ溯｡後＠縺ｦ縺上□縺輔＞縲・ -ForegroundColor Red
-    exit 1
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "$Name が見つかりません。$InstallHint"
+    }
 }
 
-# 繧ｵ繧､繝ｳ繧､繝ｳ遒ｺ隱・try {
+function Get-OutputValue {
+    param($Outputs, [string]$Name)
+    return $Outputs.$Name.value
+}
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "  Meeting Minutes Azure deployment (Bicep)" -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+
+Require-Command -Name "az" -InstallHint "infra\install-tools.ps1 を実行するか、Azure CLI をインストールしてください。"
+
+$azVersion = az version --output json 2>&1 | ConvertFrom-Json
+Write-Host "Azure CLI: $($azVersion.'azure-cli')" -ForegroundColor Green
+
+try {
     $account = az account show --output json 2>&1 | ConvertFrom-Json
-    Write-Host "  笨・繧ｵ繧､繝ｳ繧､繝ｳ荳ｭ: $($account.user.name)" -ForegroundColor Green
-    Write-Host "  笨・繧ｵ繝悶せ繧ｯ繝ｪ繝励す繝ｧ繝ｳ: $($account.name) ($($account.id))" -ForegroundColor Green
+    Write-Host "Signed in: $($account.user.name)" -ForegroundColor Green
+    Write-Host "Subscription: $($account.name) ($($account.id))" -ForegroundColor Green
 } catch {
-    Write-Host "  笨・az login 縺悟ｿ・ｦ√〒縺吶・ -ForegroundColor Red
-    Write-Host "    az login --tenant <TENANT_ID>" -ForegroundColor Yellow
-    exit 1
+    throw "az login が必要です。例: az login --tenant <TENANT_ID>"
 }
 
 Write-Host ""
-Write-Host "繝・・繝ｭ繧､險ｭ螳・" -ForegroundColor Yellow
+Write-Host "Deployment settings" -ForegroundColor Yellow
 Write-Host "  Resource Group: $ResourceGroup"
 Write-Host "  Location:       $Location"
 Write-Host "  Environment:    $Environment"
 Write-Host "  Project:        $ProjectName"
+Write-Host "  Speech SKU:     $SpeechSku"
 Write-Host ""
 
-# 遒ｺ隱・if (-not $WhatIf) {
-    $confirm = Read-Host "荳願ｨ倥〒繝・・繝ｭ繧､縺励∪縺吶°・・(y/N)"
-    if ($confirm -ne "y") { Write-Host "荳ｭ豁｢縺励∪縺励◆縲・ -ForegroundColor Yellow; exit 0 }
+if (-not $WhatIf -and -not $Yes) {
+    $confirm = Read-Host "上記設定でデプロイしますか？ (y/N)"
+    if ($confirm -ne "y") {
+        Write-Host "中止しました。" -ForegroundColor Yellow
+        exit 0
+    }
 }
 
-# 譌｢蟄伜炎髯､繧ｪ繝励す繝ｧ繝ｳ
 if ($DeleteExisting) {
-    Write-Host "笆ｶ 譌｢蟄倥Μ繧ｽ繝ｼ繧ｹ繧ｰ繝ｫ繝ｼ繝励ｒ蜑企勁..." -ForegroundColor Yellow
+    Write-Host "既存リソースグループ削除を要求しました: $ResourceGroup" -ForegroundColor Yellow
     az group delete --name $ResourceGroup --yes --no-wait
-    Write-Host "  蜑企勁繝ｪ繧ｯ繧ｨ繧ｹ繝磯∽ｿ｡縲ょｮ御ｺ・∪縺ｧ謨ｰ蛻・°縺九ｊ縺ｾ縺吶・ -ForegroundColor Yellow
+    Write-Host "削除要求を送信しました。完了まで数分かかります。" -ForegroundColor Yellow
     Start-Sleep -Seconds 5
 }
 
-# 繝ｪ繧ｽ繝ｼ繧ｹ繧ｰ繝ｫ繝ｼ繝嶺ｽ懈・ (idempotent)
-Write-Host "笆ｶ 繝ｪ繧ｽ繝ｼ繧ｹ繧ｰ繝ｫ繝ｼ繝礼｢ｺ隱・菴懈・: $ResourceGroup" -ForegroundColor Cyan
-az group create --name $ResourceGroup --location $Location --tags "Project=OccupancyCounter-MeetingMinutes" "Environment=$Environment" --output none
-Write-Host "  笨・OK" -ForegroundColor Green
-Write-Host ""
+Write-Host "Resource Group を作成/更新しています..." -ForegroundColor Cyan
+az group create `
+    --name $ResourceGroup `
+    --location $Location `
+    --tags "Project=OccupancyCounter-MeetingMinutes" "Environment=$Environment" `
+    --output none
 
-# Bicep 繝・・繝ｭ繧､
-Write-Host "笆ｶ Bicep 繝・Φ繝励Ξ繝ｼ繝医ｒ繝・・繝ｭ繧､..." -ForegroundColor Cyan
 $deploymentName = "deploy-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$commonParams = @(
+    "--resource-group", $ResourceGroup,
+    "--template-file", $mainBicep,
+    "--parameters", "@$paramFile",
+    "--parameters", "environment=$Environment", "projectName=$ProjectName", "location=$Location", "speechSku=$SpeechSku"
+)
 
 if ($WhatIf) {
-    Write-Host "  竊・what-if 繝励Ξ繝薙Η繝ｼ螳溯｡・ -ForegroundColor Yellow
-    az deployment group what-if `
-        --resource-group $ResourceGroup `
-        --template-file $mainBicep `
-        --parameters "@$paramFile" `
-        --parameters "environment=$Environment" "projectName=$ProjectName" "location=$Location"
-    Write-Host ""
-    Write-Host "  what-if 螳御ｺ・ょｮ滄圀縺ｫ繝・・繝ｭ繧､縺吶ｋ縺ｫ縺ｯ -WhatIf 繧貞､悶＠縺ｦ蜀榊ｮ溯｡後＠縺ｦ縺上□縺輔＞縲・ -ForegroundColor Yellow
-    exit 0
+    Write-Host "Bicep what-if を実行します..." -ForegroundColor Cyan
+    az deployment group what-if @commonParams
+    exit $LASTEXITCODE
 }
 
+Write-Host "Bicep デプロイを実行します..." -ForegroundColor Cyan
 az deployment group create `
     --name $deploymentName `
-    --resource-group $ResourceGroup `
-    --template-file $mainBicep `
-    --parameters "@$paramFile" `
-    --parameters "environment=$Environment" "projectName=$ProjectName" "location=$Location" `
+    @commonParams `
     --output json | Out-Null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  笨・繝・・繝ｭ繧､螟ｱ謨・ -ForegroundColor Red
-    exit 1
+    throw "Bicep デプロイに失敗しました。"
 }
 
-# Outputs蜿門ｾ・Write-Host "  笨・繝・・繝ｭ繧､謌仙粥" -ForegroundColor Green
-Write-Host ""
-Write-Host "笆ｶ Outputs蜿門ｾ・.." -ForegroundColor Cyan
+Write-Host "Deployment outputs を取得しています..." -ForegroundColor Cyan
 $outputs = az deployment group show `
     --name $deploymentName `
     --resource-group $ResourceGroup `
     --query properties.outputs `
     --output json | ConvertFrom-Json
 
-Write-Host ""
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Green
-Write-Host "  繝・・繝ｭ繧､螳御ｺ・- 蜿門ｾ玲ュ蝣ｱ" -ForegroundColor Green
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Green
-Write-Host ""
-Write-Host "  Storage Account:      $($outputs.storageAccountName.value)" -ForegroundColor White
-Write-Host "  Blob Container:       $($outputs.blobContainerName.value)" -ForegroundColor White
-Write-Host "  Queue:                $($outputs.queueName.value)" -ForegroundColor White
-Write-Host "  Speech endpoint:      $($outputs.speechEndpoint.value)" -ForegroundColor White
-Write-Host "  Speech resource:      $($outputs.speechResourceName.value)" -ForegroundColor White
-Write-Host "  Function App:         $($outputs.functionAppName.value)" -ForegroundColor White
-Write-Host "  Function Hostname:    https://$($outputs.functionAppHostName.value)" -ForegroundColor White
-Write-Host ""
+$storageAccountName = Get-OutputValue $outputs "storageAccountName"
+$speechResourceName = Get-OutputValue $outputs "speechResourceName"
+$speechEndpoint = Get-OutputValue $outputs "speechEndpoint"
+$speechRegion = Get-OutputValue $outputs "speechRegion"
+$functionAppName = Get-OutputValue $outputs "functionAppName"
+$functionHostName = Get-OutputValue $outputs "functionAppHostName"
+$queueName = Get-OutputValue $outputs "queueName"
+$blobContainerName = Get-OutputValue $outputs "blobContainerName"
 
-# Speech Key 蜿門ｾ・(output 縺ｫ縺ｯ蜷ｫ繧√※縺・↑縺・・縺ｧ蛻･騾・
-Write-Host "笆ｶ Speech Service 縺ｮ API Key 蜿門ｾ・.." -ForegroundColor Cyan
+Write-Host "Speech API Key を取得しています..." -ForegroundColor Cyan
 $speechKey = az cognitiveservices account keys list `
     --resource-group $ResourceGroup `
-    --name $outputs.speechResourceName.value `
-    --query "key1" --output tsv
-Write-Host "  笨・Speech Key 蜿門ｾ・(迺ｰ蠅・､画焚縺ｫ險ｭ螳壹＠縺ｦ縺上□縺輔＞)" -ForegroundColor Green
+    --name $speechResourceName `
+    --query "key1" `
+    --output tsv
 
-Write-Host ""
-Write-Host "笆ｶ Storage 謗･邯壽枚蟄怜・蜿門ｾ・.." -ForegroundColor Cyan
+Write-Host "Storage connection string を取得しています..." -ForegroundColor Cyan
 $storageKey = az storage account keys list `
     --resource-group $ResourceGroup `
-    --account-name $outputs.storageAccountName.value `
-    --query "[0].value" --output tsv
-$storageConn = "DefaultEndpointsProtocol=https;AccountName=$($outputs.storageAccountName.value);AccountKey=$storageKey;EndpointSuffix=core.windows.net"
+    --account-name $storageAccountName `
+    --query "[0].value" `
+    --output tsv
+$storageConn = "DefaultEndpointsProtocol=https;AccountName=$storageAccountName;AccountKey=$storageKey;EndpointSuffix=core.windows.net"
 
-# .env.azure 蜃ｺ蜉・Write-Host ""
-Write-Host "笆ｶ .env.azure 繧堤函謌・.." -ForegroundColor Cyan
-$envPath = Join-Path (Split-Path $PSScriptRoot -Parent) ".env.azure"
+Write-Host ".env.azure を生成しています..." -ForegroundColor Cyan
 $envContent = @"
-# 閾ｪ蜍慕函謌・- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-# 縺薙・繝輔ぃ繧､繝ｫ縺ｯ git commit 縺励↑縺・％縺ｨ
+# Auto-generated by infra/deploy-azure.ps1 at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+# Do not commit this file. It contains secrets.
 
-# === Azure Speech ===
+# === Azure Speech / Speech-to-text ===
+AZURE_SPEECH_MOCK=false
 AZURE_SPEECH_KEY=$speechKey
-AZURE_SPEECH_REGION=$Location
-AZURE_SPEECH_ENDPOINT=$($outputs.speechEndpoint.value)
+AZURE_SPEECH_REGION=$speechRegion
+AZURE_SPEECH_ENDPOINT=$speechEndpoint
+
+# === Azure Speaker Recognition ===
+# Speaker Recognition uses the same Azure AI Speech resource/key.
+SPEAKER_RECOGNITION_MOCK=false
+SPEAKER_RECOGNITION_ENDPOINT=$speechEndpoint
+SPEAKER_RECOGNITION_KEY=$speechKey
+SPEAKER_AUDIO_IDENTIFICATION_ENABLED=true
+SPEAKER_IDENTIFICATION_MIN_SCORE=0.65
+SPEAKER_IDENTIFICATION_MIN_SEGMENT_SEC=4
+SPEAKER_IDENTIFICATION_IGNORE_MIN_LENGTH=false
+SPEAKER_KEEP_TEAM_RECORDINGS=false
+FFMPEG_BIN=ffmpeg
 
 # === Azure Storage ===
 AZURE_STORAGE_CONNECTION_STRING=$storageConn
-AZURE_QUEUE_NAME=$($outputs.queueName.value)
-AZURE_BLOB_CONTAINER=$($outputs.blobContainerName.value)
+AZURE_BLOB_CONTAINER=$blobContainerName
+QUEUE_NAME=$queueName
+AZURE_QUEUE_NAME=$queueName
+QUEUE_CONSUMER_MOCK=false
+
+# Blob mode lets Azure Speech fetch uploaded audio without depending on Cloudflare Tunnel.
+PUBLISH_MODE=blob
+PUBLIC_BASE_URL=
 
 # === Azure Functions ===
-FUNCTION_APP_NAME=$($outputs.functionAppName.value)
-WEBHOOK_NOTIFICATION_URL=https://$($outputs.functionAppHostName.value)/api/notifications
+FUNCTION_APP_NAME=$functionAppName
+WEBHOOK_NOTIFICATION_URL=https://$functionHostName/api/notifications
 
-# === Microsoft Graph (隕！T邂｡逅・・ｾ晞ｼ) ===
+# === Microsoft Graph (fill manually from App Registration) ===
+GRAPH_MOCK=false
 MS_TENANT_ID=
 MS_CLIENT_ID=
 MS_CLIENT_SECRET=
 MS_USER_UPN=
 MS_DRIVE_PATH=/Apps/MeetingMinutes
 
-# === Anthropic Claude ===
+# === Anthropic Claude (fill manually) ===
 ANTHROPIC_API_KEY=
-CLAUDE_MODEL=claude-sonnet-4-6
+CLAUDE_MODEL=claude-sonnet-4-5
+CLAUDE_MOCK=false
 
-# === Webhook security ===
+# === Webhook security (fill manually) ===
 WEBHOOK_CLIENT_STATE=
 "@
 $envContent | Out-File -FilePath $envPath -Encoding UTF8
-Write-Host "  笨・$envPath" -ForegroundColor Green
 
 Write-Host ""
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Green
-Write-Host "  谺｡縺ｮ繧ｹ繝・ャ繝・ -ForegroundColor Green
-Write-Host "笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊絶武笊・ -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host "  Deployment completed" -ForegroundColor Green
+Write-Host "============================================================" -ForegroundColor Green
+Write-Host "Storage Account:   $storageAccountName"
+Write-Host "Blob Container:    $blobContainerName"
+Write-Host "Queue:             $queueName"
+Write-Host "Speech Resource:   $speechResourceName"
+Write-Host "Speech Endpoint:   $speechEndpoint"
+Write-Host "Function App:      $functionAppName"
+Write-Host "Function URL:      https://$functionHostName"
+Write-Host ".env output:       $envPath"
 Write-Host ""
-Write-Host "  1. .env.azure 縺ｫ Microsoft Graph 縺ｨ Anthropic 縺ｮ蛟､繧定ｿｽ險・ -ForegroundColor White
-Write-Host "  2. Functions 繧ｳ繝ｼ繝峨ｒ繝・・繝ｭ繧､:" -ForegroundColor White
-Write-Host "       cd functions" -ForegroundColor Gray
-Write-Host "       func azure functionapp publish $($outputs.functionAppName.value)" -ForegroundColor Gray
-Write-Host "  3. Microsoft Graph subscription 逋ｻ骭ｲ (蛻･繧ｹ繧ｯ繝ｪ繝励ヨ)" -ForegroundColor White
-Write-Host ""
+Write-Host "Next steps" -ForegroundColor Yellow
+Write-Host "  1. .env.azure の MS_* / ANTHROPIC_API_KEY / WEBHOOK_CLIENT_STATE を埋める"
+Write-Host "  2. TestDashboard で .env.azure を読み込む、または必要値を TestDashboard\.env にコピー"
+Write-Host "  3. functions を publish: cd functions; func azure functionapp publish $functionAppName"
+Write-Host "  4. Microsoft Graph subscription を WEBHOOK_NOTIFICATION_URL に作成"

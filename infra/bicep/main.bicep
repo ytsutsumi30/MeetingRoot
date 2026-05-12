@@ -74,6 +74,7 @@ module functions 'modules/functions.bicep' = {
 output storageAccountName string = storage.outputs.storageAccountName
 output speechEndpoint string     = speech.outputs.endpoint
 output speechResourceName string = speech.outputs.resourceName
+output speechRegion string       = speech.outputs.region
 output functionAppName string    = functions.outputs.functionAppName
 output functionAppHostName string = functions.outputs.defaultHostName
 output queueName string          = storage.outputs.queueName

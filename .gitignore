@@ -9,6 +9,7 @@ azurite-data/
 *.log
 
 # Local environment outputs
+.env.azure
 infra/check-result.json
 infra/bicep/main.json
 
