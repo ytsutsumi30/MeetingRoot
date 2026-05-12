@@ -28,9 +28,13 @@ param environment string = 'dev'
 @allowed(['F0', 'S0'])
 param speechSku string = 'S0'
 
+@description('Azure Functions と Application Insights を作成するか')
+param deployFunctions bool = false
+
 // 一意な suffix (ストレージアカウント名は全世界で一意 + 24文字)
 var uniqueSuffix = uniqueString(resourceGroup().id, projectName)
 var nameSuffix   = '${environment}-${uniqueSuffix}'
+var storageAccountName = take(toLower('${projectName}st${environment}${uniqueSuffix}'), 24)
 
 var commonTags = {
   Project:     'OccupancyCounter-MeetingMinutes'
@@ -42,7 +46,7 @@ var commonTags = {
 module storage 'modules/storage.bicep' = {
   name: 'storage-deployment'
   params: {
-    name:     toLower('${projectName}st${replace(nameSuffix, '-', '')}')
+    name:     storageAccountName
     location: location
     tags:     commonTags
   }
@@ -60,7 +64,7 @@ module speech 'modules/speech.bicep' = {
 }
 
 // ─── Function App ────────────────────────────────────────────
-module functions 'modules/functions.bicep' = {
+module functions 'modules/functions.bicep' = if (deployFunctions) {
   name: 'functions-deployment'
   params: {
     appName:           '${projectName}-fn-${nameSuffix}'
@@ -75,7 +79,7 @@ output storageAccountName string = storage.outputs.storageAccountName
 output speechEndpoint string     = speech.outputs.endpoint
 output speechResourceName string = speech.outputs.resourceName
 output speechRegion string       = speech.outputs.region
-output functionAppName string    = functions.outputs.functionAppName
-output functionAppHostName string = functions.outputs.defaultHostName
+output functionAppName string    = functions.?outputs.?functionAppName ?? ''
+output functionAppHostName string = functions.?outputs.?defaultHostName ?? ''
 output queueName string          = storage.outputs.queueName
 output blobContainerName string  = storage.outputs.containerName

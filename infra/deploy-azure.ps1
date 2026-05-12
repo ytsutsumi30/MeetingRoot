@@ -5,11 +5,12 @@
 # Creates/updates:
 #   - Azure Storage Account (Blob + Queue)
 #   - Azure AI Speech resource
-#   - Azure Function App + Application Insights
+#   - Optional Azure Function App + Application Insights
 #
 # Usage:
 #   .\deploy-azure.ps1 -WhatIf
 #   .\deploy-azure.ps1 -Yes
+#   .\deploy-azure.ps1 -Yes -DeployFunctions
 #   .\deploy-azure.ps1 -ResourceGroup rg-meeting-minutes-dev -SpeechSku S0 -Yes
 # ============================================================
 
@@ -21,6 +22,7 @@ param(
     [string]$ProjectName   = "meetmin",
     [ValidateSet("F0", "S0")]
     [string]$SpeechSku     = "S0",
+    [switch]$DeployFunctions,
     [switch]$WhatIf,
     [switch]$DeleteExisting,
     [switch]$Yes
@@ -72,6 +74,7 @@ Write-Host "  Location:       $Location"
 Write-Host "  Environment:    $Environment"
 Write-Host "  Project:        $ProjectName"
 Write-Host "  Speech SKU:     $SpeechSku"
+Write-Host "  Functions:      $($DeployFunctions.IsPresent)"
 Write-Host ""
 
 if (-not $WhatIf -and -not $Yes) {
@@ -108,7 +111,7 @@ $commonParams = @(
     "--resource-group", $ResourceGroup,
     "--template-file", $mainBicep,
     "--parameters", "@$paramFile",
-    "--parameters", "environment=$Environment", "projectName=$ProjectName", "location=$Location", "speechSku=$SpeechSku"
+    "--parameters", "environment=$Environment", "projectName=$ProjectName", "location=$Location", "speechSku=$SpeechSku", "deployFunctions=$($DeployFunctions.IsPresent.ToString().ToLowerInvariant())"
 )
 
 if ($WhatIf) {
@@ -142,6 +145,7 @@ $functionAppName = Get-OutputValue $outputs "functionAppName"
 $functionHostName = Get-OutputValue $outputs "functionAppHostName"
 $queueName = Get-OutputValue $outputs "queueName"
 $blobContainerName = Get-OutputValue $outputs "blobContainerName"
+$webhookNotificationUrl = if ([string]::IsNullOrWhiteSpace($functionHostName)) { "" } else { "https://$functionHostName/api/notifications" }
 
 Write-Host "Reading Speech API key..." -ForegroundColor Cyan
 $speechKey = az cognitiveservices account keys list `
@@ -194,7 +198,7 @@ PUBLIC_BASE_URL=
 
 # === Azure Functions ===
 FUNCTION_APP_NAME=$functionAppName
-WEBHOOK_NOTIFICATION_URL=https://$functionHostName/api/notifications
+WEBHOOK_NOTIFICATION_URL=$webhookNotificationUrl
 
 # === Microsoft Graph (fill manually from App Registration) ===
 GRAPH_MOCK=false
@@ -223,12 +227,20 @@ Write-Host "Blob Container:    $blobContainerName"
 Write-Host "Queue:             $queueName"
 Write-Host "Speech Resource:   $speechResourceName"
 Write-Host "Speech Endpoint:   $speechEndpoint"
-Write-Host "Function App:      $functionAppName"
-Write-Host "Function URL:      https://$functionHostName"
+if ($DeployFunctions) {
+    Write-Host "Function App:      $functionAppName"
+    Write-Host "Function URL:      https://$functionHostName"
+} else {
+    Write-Host "Function App:      skipped (use -DeployFunctions after quota/provider readiness)"
+}
 Write-Host ".env output:       $envPath"
 Write-Host ""
 Write-Host "Next steps" -ForegroundColor Yellow
 Write-Host "  1. Fill MS_*, ANTHROPIC_API_KEY, and WEBHOOK_CLIENT_STATE in .env.azure"
 Write-Host "  2. Load .env.azure in TestDashboard or copy required values into TestDashboard\.env"
-Write-Host "  3. Publish functions: cd functions; func azure functionapp publish $functionAppName"
-Write-Host "  4. Create Microsoft Graph subscription using WEBHOOK_NOTIFICATION_URL"
+if ($DeployFunctions) {
+    Write-Host "  3. Publish functions: cd functions; func azure functionapp publish $functionAppName"
+    Write-Host "  4. Create Microsoft Graph subscription using WEBHOOK_NOTIFICATION_URL"
+} else {
+    Write-Host "  3. For Graph webhook deployment, resolve Function quota/provider issues and rerun with -DeployFunctions"
+}

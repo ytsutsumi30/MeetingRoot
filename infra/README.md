@@ -10,9 +10,9 @@
 - Azure AI Speech resource
   - Speech-to-text
   - Speaker Recognition
-- Azure Function App
+- Azure Function App（任意）
   - Microsoft Graph webhook 受信用
-- Application Insights
+- Application Insights（任意）
 
 ## デプロイ
 
@@ -20,6 +20,14 @@
 cd C:\PRJ2\dev2\infra
 .\deploy-azure.ps1 -WhatIf
 .\deploy-azure.ps1 -Yes
+```
+
+既定では `Azure Storage` と `Azure AI Speech` のみを作成します。
+Azure Function App と Application Insights も作成する場合は、サブスクリプションの Dynamic VM quota と `Microsoft.OperationalInsights` provider を確認してから次を実行してください。
+
+```powershell
+az provider register --namespace Microsoft.OperationalInsights
+.\deploy-azure.ps1 -Yes -DeployFunctions
 ```
 
 SKUを変える場合:
