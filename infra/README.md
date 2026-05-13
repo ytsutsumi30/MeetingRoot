@@ -72,3 +72,37 @@ Claude mock: false
 - `MS_USER_UPN`
 - `ANTHROPIC_API_KEY`
 - `WEBHOOK_CLIENT_STATE`
+
+## Microsoft Graph アプリ登録
+
+`MS_CLIENT_ID`、`MS_CLIENT_SECRET`、`WEBHOOK_CLIENT_STATE` は次のスクリプトで作成・反映できます。
+
+```powershell
+cd C:\PRJ2\dev2\infra
+.\setup-graph-app.ps1
+```
+
+テナント管理者権限がある場合は、Graph API 権限の admin consent までまとめて実行できます。
+
+```powershell
+.\setup-graph-app.ps1 -GrantAdminConsent
+```
+
+既存 secret を更新する場合:
+
+```powershell
+.\setup-graph-app.ps1 -RotateSecret
+```
+
+スクリプトは以下を更新します。
+
+- `C:\PRJ2\dev2\.env.azure`
+- `C:\PRJ2\dev2\TestDashboard\.env`
+
+付与する Microsoft Graph Application permissions:
+
+- `Files.ReadWrite.All`
+- `OnlineMeetings.Read.All`
+- `OnlineMeetingTranscript.Read.All`
+- `OnlineMeetingRecording.Read.All`
+- `User.Read.All`
