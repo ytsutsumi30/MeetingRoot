@@ -146,6 +146,7 @@ $functionHostName = Get-OutputValue $outputs "functionAppHostName"
 $queueName = Get-OutputValue $outputs "queueName"
 $blobContainerName = Get-OutputValue $outputs "blobContainerName"
 $webhookNotificationUrl = if ([string]::IsNullOrWhiteSpace($functionHostName)) { "" } else { "https://$functionHostName/api/notifications" }
+$webhookLifecycleUrl    = if ([string]::IsNullOrWhiteSpace($functionHostName)) { "" } else { "https://$functionHostName/api/lifecycle" }
 
 Write-Host "Reading Speech API key..." -ForegroundColor Cyan
 $speechKey = az cognitiveservices account keys list `
@@ -190,6 +191,7 @@ AZURE_STORAGE_CONNECTION_STRING=$storageConn
 AZURE_BLOB_CONTAINER=$blobContainerName
 QUEUE_NAME=$queueName
 AZURE_QUEUE_NAME=$queueName
+SUBSCRIPTION_TABLE_NAME=subscriptions
 QUEUE_CONSUMER_MOCK=false
 
 # Blob mode lets Azure Speech fetch uploaded audio without Cloudflare Tunnel.
@@ -199,6 +201,7 @@ PUBLIC_BASE_URL=
 # === Azure Functions ===
 FUNCTION_APP_NAME=$functionAppName
 WEBHOOK_NOTIFICATION_URL=$webhookNotificationUrl
+WEBHOOK_LIFECYCLE_URL=$webhookLifecycleUrl
 
 # === Microsoft Graph (fill manually from App Registration) ===
 GRAPH_MOCK=false
@@ -206,7 +209,17 @@ MS_TENANT_ID=
 MS_CLIENT_ID=
 MS_CLIENT_SECRET=
 MS_USER_UPN=
+SUBSCRIPTION_USER_ID=
+GRAPH_SUBSCRIPTION_LIFETIME_MIN=4200
 MS_DRIVE_PATH=/Apps/MeetingMinutes
+MSAL_REDIRECT_URI=
+
+# === Room Calendar (E-4/E-5: Ghost Cancel & Early Exit) ===
+# Set to calendar email of each room resource account (e.g. room-large@contoso.com)
+ROOM_LARGE_CALENDAR=
+ROOM_MEDIUM_CALENDAR=
+ROOM_SMALL_CALENDAR=
+ROOM_BOOTH_CALENDAR=
 
 # === Anthropic Claude (fill manually) ===
 ANTHROPIC_API_KEY=

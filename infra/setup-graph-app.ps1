@@ -31,11 +31,13 @@ $dashboardEnvPath = Join-Path $rootDir "TestDashboard\.env"
 $graphAppId = "00000003-0000-0000-c000-000000000000"
 
 $requiredGraphAppRoles = @(
+    "Calendars.ReadWrite",
     "Files.ReadWrite.All",
     "OnlineMeetings.Read.All",
     "OnlineMeetingTranscript.Read.All",
     "OnlineMeetingRecording.Read.All",
-    "User.Read.All"
+    "User.Read.All",
+    "People.Read.All"
 )
 
 function Require-Command {
