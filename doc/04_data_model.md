@@ -1,6 +1,6 @@
 # 4. データモデル設計
 
-**最終更新**: 2026-05-15
+**最終更新**: 2026-05-17
 
 ---
 
@@ -23,6 +23,9 @@ erDiagram
         string roomId
         string deviceId
         string title
+        string deviceType "android|web-browser"
+        string audioFormat "m4a|webm|ogg|mp4"
+        string teamsMeetingId "optional - ケース6自動マージ用"
         datetime startedAt
         datetime endedAt
         datetime createdAt
@@ -43,7 +46,7 @@ erDiagram
         int speakerId
         string speakerLabel
         string text
-        string source "room|teams"
+        string source "room|teams|web"
     }
 
     MINUTES {
@@ -94,22 +97,22 @@ stateDiagram-v2
 
     queued --> publishing: 音声URL公開
     publishing --> transcribing: Azure Speech送信
-    transcribing --> transcribing: ポーリング中
-    transcribing --> identifying: 文字起こし完了
-    identifying --> merging: 話者識別完了
-    merging --> summarizing: マージ完了
-    summarizing --> generating: AI要約完了
-    generating --> uploading: DOCX生成完了
-    uploading --> completed: OneDrive保存完了
+    transcribing --> transcribing: ポーリング中(30秒間隔)
+    transcribing --> identifying_speakers: 文字起こし完了
+    identifying_speakers --> summarizing: 話者識別+Teamsマージ完了
+    summarizing --> building_docx: Claude AI要約完了
+    building_docx --> uploading_onedrive: DOCX生成完了
+    uploading_onedrive --> completed: OneDrive保存完了
 
     publishing --> failed: 公開失敗
     transcribing --> failed: Speech API エラー
-    identifying --> failed: 識別エラー
+    identifying_speakers --> failed: 識別エラー
     summarizing --> failed: Claude API エラー
-    generating --> failed: DOCX生成エラー
-    uploading --> failed: Graph API エラー
+    building_docx --> failed: DOCX生成エラー
+    uploading_onedrive --> failed: Graph API エラー
 
     failed --> queued: POST /reprocess
+    completed --> completed: PATCH /speaker-map\n→ POST /regenerate-minutes
     completed --> [*]
 ```
 
@@ -276,7 +279,7 @@ interface Segment {
   speakerId: number;      // Azure Speech: 1,2,3... / Teams: -1
   speakerLabel: string;   // "Speaker 1" or "山田太郎"
   text: string;           // 発言テキスト
-  source: "room" | "teams";
+  source: "room" | "teams" | "web";
   absoluteTimestamp?: string; // ISO8601
 }
 ```

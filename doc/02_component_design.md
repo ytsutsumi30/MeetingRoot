@@ -1,6 +1,6 @@
 # 2. コンポーネント設計
 
-**最終更新**: 2026-05-15
+**最終更新**: 2026-05-17
 
 ---
 
@@ -27,6 +27,15 @@ graph TB
         MAct --> AP
     end
 
+    subgraph "WEBブラウザ (TestDashboard/public/)"
+        REC["recorder.js<br/>MediaRecorder APIラッパー"]
+        RECUI["index.html 録音パネル<br/>会議室・タイトル入力"]
+        MSALUI["msal-auth.js<br/>MSAL認証・Graph連携"]
+
+        RECUI --> REC
+        RECUI --> MSALUI
+    end
+
     subgraph "Express Backend (TestDashboard)"
         SRV["server.js<br/>ルーティング"]
         JP["job-processor<br/>パイプライン制御"]
@@ -41,12 +50,14 @@ graph TB
         TM["transcript-merger<br/>発言マージ"]
         QC["queue-consumer<br/>Queue監視"]
         APub["audio-publisher<br/>音声公開"]
+        AC["audio-converter<br/>WebM→WAV変換 [I-1]"]
 
         SRV --> JP
         SRV --> SP
         SRV --> APub
         SRV --> QC
         JP --> AS
+        JP --> AC
         JP --> SI
         JP --> SInf
         JP --> TM
@@ -55,6 +66,7 @@ graph TB
         JP --> GR
         SI --> SR
         QC --> JP
+        AC --> AS
     end
 
     subgraph "Azure Functions"
@@ -62,7 +74,8 @@ graph TB
     end
 
     SC -->|"POST /ingest/headcount"| SRV
-    RU -->|"POST /ingest/recording"| SRV
+    RU -->|"POST /ingest/recording (m4a)"| SRV
+    REC -->|"POST /ingest/recording (WebM)"| SRV
     NF -->|"Queue message"| QC
 ```
 
@@ -156,19 +169,22 @@ graph LR
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: startJob()
-    queued --> transcribing: Azure Speech 送信
-    transcribing --> identifying: 文字起こし完了
-    identifying --> merging: 話者識別完了
-    merging --> summarizing: マージ完了
-    summarizing --> generating: Claude 要約完了
-    generating --> uploading: DOCX 生成完了
-    uploading --> completed: OneDrive アップロード完了
+    [*] --> queued: startJob() / startJobFromTeams()
+    queued --> publishing: 音声URL公開
+    publishing --> transcribing: Azure Speech 送信
+    transcribing --> identifying_speakers: 文字起こし完了
+    identifying_speakers --> summarizing: 話者識別+Teamsマージ完了
+    summarizing --> building_docx: Claude 要約完了
+    building_docx --> uploading_onedrive: DOCX 生成完了
+    uploading_onedrive --> completed: OneDrive アップロード完了
+    publishing --> failed: エラー
     transcribing --> failed: エラー
-    identifying --> failed: エラー
+    identifying_speakers --> failed: エラー
     summarizing --> failed: エラー
-    uploading --> failed: エラー
+    building_docx --> failed: エラー
+    uploading_onedrive --> failed: エラー
     failed --> queued: reprocess
+    completed --> completed: regenerateMinutes()
 ```
 
 | 項目 | 内容 |
@@ -275,6 +291,49 @@ stateDiagram-v2
 
 | ファイル | 責務 |
 |---|---|
-| `index.html` (8,303B) | ローカル版 ダッシュボード |
-| `dashboard.js` (26,675B) | 拡張版UI (ジョブ管理・Speaker Profile管理含む) |
-| `style.css` (14,156B) | ローカル版スタイル |
+| `index.html` (8,303B+) | ローカル版 ダッシュボード（WEB録音パネル追加済み） |
+| `dashboard.js` (26,675B+) | 拡張版UI (ジョブ管理・Speaker Profile管理含む) |
+| `style.css` (14,156B+) | ローカル版スタイル（録音UIスタイル追加済み） |
+| `recorder.js` (新規) | MediaRecorder APIラッパー。WebM/OGG/MP4の優先順で形式選択。POST /ingest/recording へマルチパート送信 |
+| `msal-auth.js` | MSAL認証・Microsoft Graph連携（E-3〜E-6実装済み） |
+
+---
+
+## 2.6 audio-converter コンポーネント（I-1 実装済み）
+
+### audio-converter.js
+
+| 項目 | 内容 |
+|---|---|
+| 責務 | WEBブラウザが送信した WebM/OGG/MP4 音声を m4a / WAV に変換 |
+| 手段 | ffmpeg 子プロセス（`FFMPEG_BIN` 環境変数で指定） |
+| エクスポート | `convertToWav()`, `convertToM4a()`, `isWebmOrOgg()`, `toWavPath()`, `toM4aPath()` |
+| 入力 | 任意音声ファイルパス（拡張子で判定） |
+| 出力 | `.m4a`（Batch Transcription用）または `.wav`（Speaker Recognition用） |
+| 対象 | `device_id === "web-browser"` の場合のみ job-processor.js PUBLISHING ステップで実行 |
+| モック | `AUDIO_CONVERTER_MOCK=true` でローカルテスト可（変換スキップ） |
+
+---
+
+## 2.7 話者マップ編集UI（I-4 実装済み）
+
+### dashboard.js — 話者マップ編集機能
+
+| 関数 | 内容 |
+|---|---|
+| `speakerMapEditorHtml(job)` | job.transcript.segments からユニークな speakerLabel を抽出し、名前変更フォームを描画 |
+| `submitSpeakerMap(event, jobId)` | PATCH /api/jobs/:jobId/speaker-map → POST /api/jobs/:jobId/regenerate-minutes を順次呼び出し |
+
+### server.js — 話者マップAPI
+
+| エンドポイント | 内容 |
+|---|---|
+| `PATCH /api/jobs/:jobId/speaker-map` | speakerMap を受け取り applySpeakerMap() を実行 |
+| `POST /api/jobs/:jobId/regenerate-minutes` | regenerateMinutes() を実行し議事録を再生成 |
+
+### job-processor.js — 話者マップ処理関数
+
+| 関数 | 内容 |
+|---|---|
+| `applySpeakerMap(jobId, speakerMap)` | segments の speakerLabel をリマップ、minutes をクリア、speakerMapApplied を記録 |
+| `regenerateMinutes(jobId)` | SUMMARIZING→BUILDING_DOCX→UPLOADING→COMPLETED を再実行 |

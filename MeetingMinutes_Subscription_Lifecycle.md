@@ -634,5 +634,28 @@ curl.exe -X POST "$webhookUrl?code=$key" `
 
 ---
 
-**最終更新**: 2026-05-10
+## 12. 実装反映メモ (2026-05-16)
+
+- `functions/notifications/index.js` に lifecycleEvent 分岐を実装済み。
+- `functions/subscriptions-bootstrap` を追加し、手動 bootstrap を実行可能にした。
+- `functions/subscriptions-renew` を追加し、12時間タイマーで renew / dead 再作成を実行可能にした。
+- `functions/shared/subscriptionStore.js` で Azurite / Azure Table Storage の状態永続化を実装した。
+
+### 12.1 ローカル受け入れの最小コマンド
+
+```powershell
+cd C:\PRJ2\dev2\infra
+.\start-local-dev.ps1
+
+cd C:\PRJ2\dev2\functions
+npm test
+
+curl.exe "http://localhost:7071/api/notifications?validationToken=test123"
+```
+
+上記が成功した後、lifecycle 3種 (`reauthorizationRequired` / `subscriptionRemoved` / `missed`) を順に投入し、Table の `status` と `recoveryRequired` が期待通りに遷移することを確認する。
+
+---
+
+**最終更新**: 2026-05-16
 **設計者**: Claude / Yoshihiro Tsutsumi

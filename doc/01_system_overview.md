@@ -1,6 +1,6 @@
 # 1. システム全体概要
 
-**最終更新**: 2026-05-15
+**最終更新**: 2026-05-17
 
 ---
 
@@ -13,9 +13,11 @@
 | 機能 | 概要 |
 |---|---|
 | **滞在人数カウント (W1)** | Android CameraX + ML Kit で顔検出し、リアルタイムにダッシュボードへ反映 |
-| **議事録自動生成 (W2-W3)** | 会議室の音声を録音 → 文字起こし → AI要約 → Word文書生成 → OneDrive保存 |
+| **議事録自動生成 (W2-W3)** | 会議室の音声を録音（Android/WEBブラウザ）→ 文字起こし → AI要約 → Word文書生成 → OneDrive保存 |
+| **WEB録音 (W3-web)** | PCブラウザのマイクから録音し、同一パイプラインで議事録生成（MediaRecorder API） |
 | **Teams連携 (P4)** | Teams会議のLive Transcriptを自動取得し、物理参加者の発言とマージ |
-| **話者識別** | 声紋プロファイルによる自動話者識別 + LLM推定 |
+| **話者識別** | 声紋プロファイル（Azure Speaker Recognition）による自動話者識別 + LLM推定（3レベル） |
+| **声紋プロファイル登録 (計画中)** | WEBブラウザから声紋サンプル録音 → プロファイル登録 → 以降の会議で自動識別 |
 
 ---
 
@@ -25,6 +27,7 @@
 graph TB
     subgraph "会議室 (物理)"
         Android["📱 Android端末<br/>CameraX + ML Kit<br/>MediaRecorder"]
+        WebBrowser["🌐 WEBブラウザ<br/>MediaRecorder API<br/>(PC マイク)"]
     end
 
     subgraph "リモート"
@@ -73,6 +76,7 @@ graph TB
 
     Android -->|"POST /ingest/headcount<br/>(3-10秒ごと)"| CF
     Android -->|"POST /ingest/recording<br/>(会議終了時)"| CF
+    WebBrowser -->|"POST /ingest/recording<br/>(WebM/OGG/MP4)"| CF
     CF --> Express
 
     Teams -->|"会議終了 → Webhook"| AzFunc
@@ -124,14 +128,27 @@ graph LR
         A4["🏢 1台がTeams参加"] --> B4["Android録音<br/>(スピーカー音も拾う)"]
         B4 --> C4["Azure Speech"]
     end
+
+    subgraph "ケース5: WEBブラウザのみ ★新"
+        A5["🌐 PCブラウザ録音"] --> B5["WebM→WAV変換"]
+        B5 --> C5["Azure Speech<br/>diarization"]
+        C5 --> D5["声紋識別<br/>→実名"]
+    end
+
+    subgraph "ケース6: WEBブラウザ+Teams同時 ★新"
+        A6["🌐+💻 WEB録音+Teams接続"] --> B6["WEB録音<br/>teams_meeting_id付与"]
+        B6 --> C6["TranscriptMerger<br/>WEB+Teams統合"]
+    end
 ```
 
-| ケース | 物理参加 | Teams | 議事録生成元 |
-|---|---|---|---|
-| 1. 全員物理 | ◯ | × | Android録音 → Azure Speech |
-| 2. 全員リモート | × | ◯ | Teams Live Transcript |
-| 3. ハイブリッド | ◯ | ◯ | **両方をマージ** |
-| 4. 会議室Teams接続 | ◯ | × | Android録音のみ |
+| ケース | 物理参加 | Teams | 議事録生成元 | 話者識別 |
+|---|---|---|---|---|
+| 1. 全員物理 | ◯ | × | Android録音 → Azure Speech | 声紋プロファイル |
+| 2. 全員リモート | × | ◯ | Teams Live Transcript | Teams実名 |
+| 3. ハイブリッド | ◯ | ◯ | **両方をマージ** | Teams実名 + 声紋補完 |
+| 4. 会議室Teams接続 | ◯ | × | Android録音のみ | 声紋プロファイル |
+| **5. WEBブラウザのみ** ★新 | ◯(PC) | × | WEB録音 → Azure Speech | 声紋プロファイル |
+| **6. WEBブラウザ+Teams同時** ★新 | ◯(PC) | ◯ | **WEB録音+Teamsマージ** | Teams実名 + 声紋補完 |
 
 ---
 
@@ -225,7 +242,65 @@ C:\PRJ2\dev2\
 | W1 | 滞在人数カウント・ダッシュボード | ✅ 本番稼働中 |
 | W2 | 音声録音 → Azure Speech 文字起こし | ✅ 実装済み |
 | W3 | Claude AI 議事録生成 → DOCX → OneDrive | ✅ 実装済み |
+| W3-web | WEBブラウザ録音UI（MediaRecorder API） | ✅ 実装済み |
 | P4 | Teams Webhook → Queue → 自動連携 | ✅ 実装済み (Azure実機未テスト) |
 | P5 | Azurite ログローテーション | ✅ 運用中 |
-| — | 話者プロファイル登録・音声照合 | ✅ 実装済み |
+| — | 話者プロファイル登録・音声照合 (APIのみ) | ✅ サービス実装済み・UI未 |
 | — | LLM 話者推定 | ✅ 実装済み |
+| I-1 | WEB録音 WebM→m4a変換（audio-converter.js / ffmpegラッパー） | ✅ 実装済み |
+| I-2 | 声紋プロファイル登録UI（WEBブラウザから登録） | ✅ 実装済み (dashboard.js 既存) |
+| I-3 | WEB録音とTeams会議IDの自動連携（teams_meeting_id） | ✅ 実装済み |
+| I-4 | 話者マップ手動編集UI（PATCH /api/jobs/:jobId/speaker-map） | ✅ 実装済み |
+
+---
+
+## 1.7 話者識別仕様
+
+### Teams会議文字起こしの仕様
+
+| 項目 | 内容 |
+|---|---|
+| 取得方法 | Microsoft Graph API `GET /users/{id}/onlineMeetings/{id}/transcripts/{id}/content` |
+| フォーマット | **VTT (WebVTT)** 形式 |
+| 話者情報 | **Teamsにログインした参加者は実名で話者ラベル付与** |
+| トリガー | 会議終了 → Graph Webhook通知 → Azure Functions → Blob/Queue |
+| 制約 | Teams接続が1台のみ（会議室PCなど）の場合、**全発言が1ラベル（会議室マイク）になる** |
+| 必要権限 | `OnlineMeetings.Read.All`, `OnlineMeetingTranscript.Read.All` (Admin Consent必要) |
+
+### 声紋プロファイリング仕様
+
+| 項目 | 内容 |
+|---|---|
+| 外部サービス | Azure Speaker Recognition（Text-Independent Identification） |
+| API Version | 2021-09-05 |
+| 登録要件 | 20秒以上のクリアな発話音声（WAV PCM形式） |
+| 照合方式 | diarization後の各話者代表セグメント（≥4秒）をAPIに送信 |
+| 信頼度閾値 | ≥0.65 → 自動識別、<0.65 → 「話者未識別」 |
+| モック対応 | `SPEAKER_RECOGNITION_MOCK=true` でローカルテスト可 |
+| 登録上限 | 最大50プロファイル（identifySingleSpeakerの制約） |
+
+### 話者識別3レベル
+
+| レベル | 方式 | 精度 | 条件 |
+|---|---|---|---|
+| L1 | Azure Speech diarization | Speaker_0, 1... 分離のみ | 常時実行 |
+| L2 | Azure Speaker Recognition 声紋照合 | 実名（高精度） | プロファイル登録済み + WAV ≥4秒 |
+| L3 | LLM（Claude）テキスト推定 | 実名（要確認） | テキスト前置き「田中:」または文脈推定 |
+
+### 同一PCマイク会議（ケース5/6）の話者識別フロー
+
+```
+WEBブラウザ録音（WebM）
+  ↓ server.js: WebM→WAV変換（ffmpegまたはWeb Audio API）[I-1]
+  ↓ Azure Speech Batch Transcription (diarization: true)
+  → Speaker_0, Speaker_1... ラベル付きセグメント
+  ↓ audio-segments.js で代表サンプル抽出 (WAV ≥4秒)
+  ↓ Azure Speaker Recognition: identifySingleSpeaker
+  → 登録済みプロファイル（声紋）と照合 (threshold: 0.65)
+  → 実名に置換 or 「話者未識別」
+
+Teams同時接続の場合（ケース6）:
+  WEB録音の識別済みセグメント + Teams VTTセグメント
+  ↓ transcript-merger.js (時系列マージ・重複除去)
+  → 統合議事録
+```

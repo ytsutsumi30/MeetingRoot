@@ -64,11 +64,26 @@ resource queue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-0
   name: queueName
 }
 
+// ─── Table Storage (Subscription Lifecycle 状態管理) ─────────────
+@description('Graph Subscription 状態管理用 Table 名')
+param subscriptionTableName string = 'subscriptions'
+
+resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: storage
+  name: 'default'
+}
+
+resource subscriptionsTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: tableService
+  name: subscriptionTableName
+}
+
 // ─── Outputs ─────────────────────────────────────────
-output storageAccountId string   = storage.id
-output storageAccountName string = storage.name
-output containerName string      = container.name
-output queueName string          = queue.name
+output storageAccountId string        = storage.id
+output storageAccountName string      = storage.name
+output containerName string           = container.name
+output queueName string               = queue.name
+output subscriptionTableName string   = subscriptionsTable.name
 
 // 接続文字列 (Functions/Express 両方で使用)
 @secure()

@@ -20,9 +20,9 @@ function Write-Result {
 function Invoke-Api {
     param($method, $path, $body = $null)
     try {
-        $headers = @{ "Content-Type" = "application/json" }
+        $headers = @{ "Content-Type" = "application/json"; "X-API-Key" = $env:TESTDASHBOARD_API_KEY }
         if ($body) { $r = Invoke-WebRequest -Uri "$BASE$path" -Method $method -Body $body -Headers $headers -UseBasicParsing -ErrorAction Stop }
-        else       { $r = Invoke-WebRequest -Uri "$BASE$path" -Method $method -UseBasicParsing -ErrorAction Stop }
+        else       { $r = Invoke-WebRequest -Uri "$BASE$path" -Method $method -Headers $headers -UseBasicParsing -ErrorAction Stop }
         $json = $null; try { $json = $r.Content | ConvertFrom-Json } catch {}
         return @{ ok = $true; status = $r.StatusCode; json = $json; content = $r.Content }
     } catch {
@@ -78,8 +78,30 @@ if ($r.ok -and $r.json -and $r.json.rooms) {
 } else { Write-Result "TC-W1 api/state" "FAIL" $r.error }
 # --- W2: Recording Upload ---
 Write-Host ""; Write-Host "--- [W2] Recording Upload ---"
-$tmpAudio = [System.IO.Path]::Combine($env:TEMP, "smoke-test.m4a")
-[System.IO.File]::WriteAllBytes($tmpAudio, ([byte[]]::new(2048)))
+$tmpAudio = [System.IO.Path]::Combine($env:TEMP, "smoke-test.wav")
+# Generate a minimal valid WAV file: 16kHz, mono, 16-bit PCM, 2 seconds of silence
+$sampleRate = 16000; $channels = 1; $bitsPerSample = 16
+$numSamples = $sampleRate * 2  # 2 seconds
+$dataSize = $numSamples * $channels * ($bitsPerSample / 8)
+$fileSize = 36 + $dataSize
+$wavHeader = [byte[]]@(
+    0x52,0x49,0x46,0x46,  # "RIFF"
+    [byte]($fileSize -band 0xFF), [byte](($fileSize -shr 8) -band 0xFF), [byte](($fileSize -shr 16) -band 0xFF), [byte](($fileSize -shr 24) -band 0xFF),
+    0x57,0x41,0x56,0x45,  # "WAVE"
+    0x66,0x6D,0x74,0x20,  # "fmt "
+    0x10,0x00,0x00,0x00,  # chunk size = 16
+    0x01,0x00,            # PCM format
+    [byte]$channels, 0x00,
+    [byte]($sampleRate -band 0xFF), [byte](($sampleRate -shr 8) -band 0xFF), 0x00, 0x00,
+    [byte](($sampleRate * $channels * $bitsPerSample/8) -band 0xFF), [byte]((($sampleRate * $channels * $bitsPerSample/8) -shr 8) -band 0xFF), 0x00, 0x00,
+    [byte]($channels * $bitsPerSample/8), 0x00,
+    [byte]$bitsPerSample, 0x00,
+    0x64,0x61,0x74,0x61,  # "data"
+    [byte]($dataSize -band 0xFF), [byte](($dataSize -shr 8) -band 0xFF), [byte](($dataSize -shr 16) -band 0xFF), [byte](($dataSize -shr 24) -band 0xFF)
+)
+$pcmData = [byte[]]::new($dataSize)  # silence
+$wavBytes = $wavHeader + $pcmData
+[System.IO.File]::WriteAllBytes($tmpAudio, $wavBytes)
 $stamp   = Get-Date -Format "yyyyMMdd-HHmmss"
 $jobId   = "smoke-$stamp"
 $startAt = (Get-Date).AddMinutes(-30).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
@@ -88,7 +110,7 @@ $metaObj = [PSCustomObject]@{ job_id=$jobId; device_id="3F:A8:91:0C:7B:E2"; room
 $metaJson = $metaObj | ConvertTo-Json -Compress
 $metaFile = [System.IO.Path]::Combine($env:TEMP, "smoke-meta.json")
 [System.IO.File]::WriteAllText($metaFile, $metaJson, (New-Object System.Text.UTF8Encoding $false))
-$curlOut = & curl.exe -s -X POST "$BASE/ingest/recording" -F "meta=<$metaFile" -F "audio=@${tmpAudio};type=audio/mp4" 2>&1
+$curlOut = & curl.exe -s -X POST "$BASE/ingest/recording" -H "X-API-Key: $env:TESTDASHBOARD_API_KEY" -F "meta=<$metaFile" -F "audio=@${tmpAudio};type=audio/wav" 2>&1
 $uploadOk = $false
 try {
     $parsed = $curlOut | ConvertFrom-Json
@@ -131,7 +153,7 @@ if ($r.json -and $r.json.minutes) {
     else { Write-Result "TC-W3-03 markdown endpoint" "FAIL" "HTTP $($mdR.status)" }
     $docxPath = [System.IO.Path]::Combine($env:TEMP, "smoke-minutes.docx")
     try {
-        Invoke-WebRequest -Uri "$BASE/api/minutes/$jobId/download" -OutFile $docxPath -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri "$BASE/api/minutes/$jobId/download" -Headers @{"X-API-Key"=$env:TESTDASHBOARD_API_KEY} -OutFile $docxPath -UseBasicParsing -ErrorAction Stop
         $sz = (Get-Item $docxPath).Length
         if ($sz -gt 1000) { Write-Result "TC-W3-02 docx download" "PASS" "size=${sz}B" }
         else { Write-Result "TC-W3-02 docx download" "FAIL" "size=$sz too small" }

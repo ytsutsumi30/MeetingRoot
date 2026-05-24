@@ -1,6 +1,6 @@
 # 5. API設計
 
-**最終更新**: 2026-05-15
+**最終更新**: 2026-05-17
 
 ---
 
@@ -16,15 +16,17 @@ graph LR
     end
 
     subgraph "議事録 (W2-W3)"
-        B1["POST /ingest/recording"]
+        B1["POST /ingest/recording<br/>(Android / WEBブラウザ)"]
         B2["GET /api/jobs"]
         B3["GET /api/jobs/:jobId"]
         B4["GET /api/recordings"]
         B5["GET /api/minutes/:jobId/download"]
         B6["GET /api/minutes/:jobId/markdown"]
+        B7["PATCH /api/jobs/:jobId/speaker-map"]
+        B8["POST /api/jobs/:jobId/regenerate-minutes"]
     end
 
-    subgraph "話者プロファイル"
+    subgraph "話者プロファイル (C1〜C6)"
         C1["GET /api/speaker-profiles"]
         C2["GET /api/speaker-profiles/:id"]
         C3["POST /api/speaker-profiles"]
@@ -38,6 +40,60 @@ graph LR
         D2["GET /public-audio/:token/:filename"]
     end
 ```
+
+---
+
+## 5.1a 話者プロファイルAPI 詳細
+
+### GET `/api/speaker-profiles`
+
+登録済み声紋プロファイル一覧取得。
+
+**Response (200):**
+```json
+{
+  "profiles": [
+    {
+      "id": "spk-xxx",
+      "displayName": "山田太郎",
+      "email": "yamada@contoso.com",
+      "department": "開発部",
+      "enrollmentStatus": "Enrolled",
+      "enrollmentsCount": 1,
+      "enrollmentsSpeechLengthInSec": 30.5,
+      "remainingEnrollmentsSpeechLengthInSec": 0,
+      "mocked": false
+    }
+  ]
+}
+```
+
+### POST `/api/speaker-profiles`
+
+新規声紋プロファイル作成（Azure Speaker Recognition Profile作成）。
+
+**Request (multipart または JSON):**
+```json
+{
+  "displayName": "山田太郎",
+  "email": "yamada@contoso.com",
+  "department": "開発部",
+  "locale": "ja-JP"
+}
+```
+> `audio` パートを同時送信すると登録（enroll）まで行う（任意）
+
+### POST `/api/speaker-profiles/:id/enroll`
+
+声紋音声サンプルを登録（WAV PCM推奨、≥20秒）。
+
+| 項目 | 内容 |
+|---|---|
+| Content-Type | multipart/form-data |
+| `audio` パート | WAV PCM (16kHz, mono) ≥20秒 |
+| `ignoreMinLength` | `"true"` でテスト時の長さ制限を無視 |
+
+> WEBブラウザUIでは MediaRecorder で録音した WebM を送信し、サーバー側でWAVに変換する（I-1実装後）
 
 ---
 
@@ -73,7 +129,7 @@ Android からの人数データ受信。
 
 ### POST `/ingest/recording`
 
-Android からの会議音声受信。
+Android または WEBブラウザからの会議音声受信。
 
 | 項目 | 値 |
 |---|---|
@@ -85,8 +141,13 @@ Android からの会議音声受信。
 
 | Part | Type | 内容 |
 |---|---|---|
-| `meta` | application/json | `{job_id, device_id, room_id, title, started_at, ended_at, language}` |
-| `audio` | audio/mp4 | m4a バイナリ |
+| `meta` | application/json | `{job_id, device_id, room_id, title, started_at, ended_at, language, teams_meeting_id?}` |
+| `audio` | audio/mp4 または audio/webm | m4a / WebM バイナリ |
+
+> **WEB録音時の追加フィールド:**
+> - `device_id`: `"web-browser"` (固定)
+> - `teams_meeting_id`: Teams会議と連携する場合に指定 → ケース6ハイブリッド自動マージ起動
+> - 音声形式: WebM/OGG/MP4（ブラウザのサポートする形式を自動選択）
 
 **Response (202):**
 ```json
@@ -174,6 +235,39 @@ Android からの会議音声受信。
 | Header | 値 |
 |---|---|
 | Content-Type | text/markdown; charset=utf-8 |
+
+---
+
+### PATCH `/api/jobs/:jobId/speaker-map`
+
+話者ラベルを手動でリマップし、議事録を再生成可能にする（I-4）。
+
+**Request (JSON):**
+```json
+{
+  "speakerMap": {
+    "Speaker 0": "山田太郎",
+    "Speaker 1": "佐藤花子"
+  }
+}
+```
+
+**Response (200):**
+```json
+{ "ok": true, "message": "Speaker map applied", "appliedAt": "2026-05-17T14:00:00+09:00" }
+```
+
+---
+
+### POST `/api/jobs/:jobId/regenerate-minutes`
+
+話者マップ適用後に議事録を再生成する（I-4）。  
+SUMMARIZING → BUILDING_DOCX → UPLOADING → COMPLETED を再実行。
+
+**Response (200):**
+```json
+{ "ok": true, "message": "Minutes regenerated", "status": "completed" }
+```
 
 ---
 

@@ -1,6 +1,6 @@
 # 3. データフロー・シーケンス設計
 
-**最終更新**: 2026-05-15
+**最終更新**: 2026-05-17
 
 ---
 
@@ -10,14 +10,16 @@
 flowchart LR
     subgraph Input["入力"]
         CAM["📷 カメラ<br/>(顔検出)"]
-        MIC["🎤 マイク<br/>(録音)"]
+        MIC_AND["🎤 Androidマイク<br/>(m4a録音)"]
+        MIC_WEB["🌐 WEBブラウザ<br/>(WebM録音)"]
         TEAMS["💻 Teams<br/>(Transcript)"]
     end
 
     subgraph Process["処理"]
-        STT["🎤 Azure Speech<br/>文字起こし"]
+        CONV["🔄 WAV変換<br/>(WebM→WAV)"]
+        STT["🎤 Azure Speech<br/>文字起こし+分離"]
         MERGE["🔀 Merger<br/>発言マージ"]
-        SPKID["🗣️ Speaker ID<br/>話者識別"]
+        SPKID["🗣️ Speaker ID<br/>声紋識別"]
         AI["🤖 Claude<br/>AI要約"]
         DOCX["📄 docx-builder<br/>Word生成"]
     end
@@ -29,7 +31,8 @@ flowchart LR
     end
 
     CAM -->|headcount| DASH
-    MIC -->|m4a| STT
+    MIC_AND -->|m4a| STT
+    MIC_WEB -->|WebM| CONV -->|WAV| STT
     TEAMS -->|VTT| MERGE
     STT -->|segments| MERGE
     MERGE --> SPKID
@@ -209,9 +212,58 @@ flowchart TD
     MANUAL --> AUTO
 ```
 
----
+## 3.8 WEB録音 話者識別フロー（ケース5/6）★新
 
-## 3.7 Graph Webhook Subscription ライフサイクル
+### ケース5: PCブラウザのみ
+
+```mermaid
+sequenceDiagram
+    participant Browser as 🌐 WEBブラウザ
+    participant Express as 🖥️ Express
+    participant Conv as 🔄 WAV変換
+    participant AzSpeech as 🎤 Azure Speech
+    participant SpkID as 🗣️ Speaker ID
+
+    Browser->>Browser: MediaRecorder録音<br/>(WebM/OGG/MP4)
+    Browser->>Express: POST /ingest/recording<br/>(meta: device_id="web-browser")
+    Express->>Conv: ffmpeg WebM→WAV変換 [I-1]
+    Conv-->>Express: PCM WAV 16kHz mono
+
+    Express->>AzSpeech: POST /transcriptions<br/>(diarization:true)
+    Note over AzSpeech: Speaker_0, Speaker_1...に分離
+
+    AzSpeech-->>Express: transcript segments
+
+    Express->>SpkID: 各話者の代表セグメント(≥4秒)
+    SpkID->>SpkID: Azure Speaker Recognition<br/>identifySingleSpeaker
+    Note over SpkID: 登録済み声紋と照合<br/>confidence ≥0.65 → 実名
+    SpkID-->>Express: speakerMap
+
+    Express->>Express: Claude 議事録生成
+```
+
+### ケース6: WEBブラウザ + Teams同時
+
+```mermaid
+sequenceDiagram
+    participant Browser as 🌐 WEBブラウザ
+    participant Teams as 💻 Teams
+    participant Express as 🖥️ Express
+    participant Merger as 🔀 TranscriptMerger
+
+    Browser->>Express: POST /ingest/recording<br/>(meta: teams_meeting_id="AAMk...") [I-3]
+    Teams->>Express: Queue経由 VTT受信<br/>(実名付き)
+
+    Express->>Express: teams_meeting_id で関連付け
+    Express->>Merger: roomSegments[] + teamsSegments[]
+    Merger->>Merger: 時系列マージ・重複除去
+    Note over Merger: Teams話者名が実名 → 優先<br/>残りは声紋識別
+
+    Merger-->>Express: mergedSegments[]
+    Express->>Express: Claude 議事録生成（合成）
+```
+
+---
 
 ```mermaid
 sequenceDiagram

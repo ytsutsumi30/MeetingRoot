@@ -597,3 +597,46 @@ Write-Host "`n結果: PASS=$pass FAIL=$fail" -ForegroundColor $(if ($fail -eq 0)
 | 実装内容 | ステータス | 詳細 |
 |---|---|---|
 | **優先度2: ジョブ状態JSON永続化** | ✅ 実装完了 | `job-processor.js` に `persistJob()` / `loadPersistedJobs()` を追加。`storage/jobs/<jobId>.json` にジョブのスナップショットを保存。サーバー再起動時に自動復元。次回サーバー再起動から有効。 |
+
+---
+
+## 8. E-1 Lifecycle 追加検証 (2026-05-16)
+
+### TC-E1-01: lifecycle `missed` 通知で状態遷移
+
+```powershell
+curl.exe -X POST http://localhost:7071/api/notifications `
+  -H "Content-Type: application/json" `
+  -d '{"value":[{"clientState":"long-random-string-for-validation","lifecycleEvent":"missed","subscriptionId":"sub-e1-001"}]}'
+
+# 期待値: HTTP 202 / outputQueueItem なし / Table status=missed
+```
+
+### TC-E1-02: lifecycle `subscriptionRemoved` 通知で dead 化
+
+```powershell
+curl.exe -X POST http://localhost:7071/api/notifications `
+  -H "Content-Type: application/json" `
+  -d '{"value":[{"clientState":"long-random-string-for-validation","lifecycleEvent":"subscriptionRemoved","subscriptionId":"sub-e1-001"}]}'
+
+# 期待値: HTTP 202 / Table status=dead / recoveryRequired=true
+```
+
+### TC-E1-03: renew で dead 再作成
+
+```powershell
+cd C:\PRJ2\dev2\functions
+npm test
+
+# 期待値: subscriptions-renew のテストが pass し、dead 再作成ロジックを確認
+```
+
+### TC-E1-04: 通常通知回帰
+
+```powershell
+curl.exe -X POST http://localhost:7071/api/notifications `
+  -H "Content-Type: application/json" `
+  -d '{"value":[{"changeType":"created","clientState":"long-random-string-for-validation","resource":"communications/onlineMeetings('"'"'meeting-123'"'"')/transcripts('"'"'transcript-456'"'"')"}]}'
+
+# 期待値: HTTP 202 / processed=1 / minutes-jobs queue にメッセージ投入
+```

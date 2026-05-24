@@ -30,18 +30,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-// Consumption Plan
-resource hostingPlan 'Microsoft.Web/serverfarms@2022-09-01' = {
-  name: '${appName}-plan'
-  location: location
-  tags: tags
-  sku: {
-    name: 'Y1'
-    tier: 'Dynamic'
-  }
-  properties: {
-    reserved: false
-  }
+// Consumption Plan (Linux) - 共有プランを参照 (新規作成はクォータ制約により不可)
+resource hostingPlan 'Microsoft.Web/serverfarms@2022-09-01' existing = {
+  name: 'JapanEastLinuxDynamicPlan'
 }
 
 // Function App
@@ -49,7 +40,7 @@ resource functionApp 'Microsoft.Web/sites@2022-09-01' = {
   name: appName
   location: location
   tags: tags
-  kind: 'functionapp'
+  kind: 'functionapp,linux'
   identity: {
     type: 'SystemAssigned'
   }
@@ -57,7 +48,7 @@ resource functionApp 'Microsoft.Web/sites@2022-09-01' = {
     serverFarmId: hostingPlan.id
     httpsOnly: true
     siteConfig: {
-      nodeVersion: nodeVersion
+      linuxFxVersion: 'Node|22'
       use32BitWorkerProcess: false
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -69,11 +60,8 @@ resource functionApp 'Microsoft.Web/sites@2022-09-01' = {
       }
       appSettings: [
         { name: 'AzureWebJobsStorage',                   value: storageConnString }
-        { name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING', value: storageConnString }
-        { name: 'WEBSITE_CONTENTSHARE',                  value: toLower(appName) }
         { name: 'FUNCTIONS_EXTENSION_VERSION',           value: '~4' }
         { name: 'FUNCTIONS_WORKER_RUNTIME',              value: 'node' }
-        { name: 'WEBSITE_NODE_DEFAULT_VERSION',          value: nodeVersion }
         { name: 'APPINSIGHTS_INSTRUMENTATIONKEY',        value: appInsights.properties.InstrumentationKey }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
         { name: 'AZURE_STORAGE_CONNECTION_STRING',       value: storageConnString }
